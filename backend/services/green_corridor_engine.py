@@ -1,9 +1,10 @@
+# 2025-02-26
 """
-Green Corridor Engine – turns traffic signals along emergency routes to GREEN.
+Safe Corridor Engine – turns traffic signals along emergency routes to GREEN.
 
 When an ambulance or emergency vehicle is dispatched, hex cells along the route
 are marked as "green corridor". All traffic signals within those hexes are
-forced to GREEN until the vehicle passes or the corridor expires.
+forced to Special light phase until the vehicle passes or the corridor expires.
 """
 from __future__ import annotations
 

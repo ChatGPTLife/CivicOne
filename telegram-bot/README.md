@@ -1,3 +1,4 @@
+<!-- 2025-02-26 -->
 # CivicOne Telegram Bot (Node.js)
 
 Async-first implementation. Handles load well and is less prone to lag.

@@ -1,3 +1,4 @@
+<!-- 2025-02-26 -->
 # H3 Hexagonal Grid
 
 **File:** `services/hex_service.py`

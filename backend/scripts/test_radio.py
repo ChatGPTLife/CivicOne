@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 2025-02-26
 """
 Test script for radio comms. Run from backend dir: python scripts/test_radio.py
 Requires: backend running, DB with hex_cells and vehicles.

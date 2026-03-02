@@ -1,3 +1,4 @@
+// 2025-02-26
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {

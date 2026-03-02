@@ -1,3 +1,4 @@
+// 2025-02-26
 "use client";
 
 import "leaflet/dist/leaflet.css";
@@ -16,7 +17,29 @@ import {
 } from "react-leaflet";
 
 import type { HexCell, Incident, TrafficSignal, Vehicle } from "@/types";
+import { useInterpolatedPosition } from "@/hooks/useInterpolatedPosition";
 import { buildHexLabelMap } from "@/lib/hexLabels";
+
+function SmoothVehicleMarker({ v, icon }: { v: Vehicle; icon: L.Icon | L.DivIcon }) {
+  const [lat, lng] = useInterpolatedPosition(v.latitude, v.longitude);
+  const label =
+    v.type === "police"
+      ? "Pink Patrol (police)"
+      : v.type === "ambulance"
+        ? "Ambulance"
+        : v.type === "fire"
+          ? "Fire Service"
+          : "Municipal";
+  return (
+    <Marker key={`vehicle-${String(v.id)}`} position={[lat, lng]} icon={icon}>
+      <Tooltip direction="top" offset={[0, -10]} className="vehicle-tooltip">
+        <div className="font-semibold">{label}</div>
+        <div>Status: {v.status}</div>
+        <div className="text-white/70">ID: {String(v.id).slice(0, 8)}…</div>
+      </Tooltip>
+    </Marker>
+  );
+}
 
 interface MapViewProps {
   hexCells: HexCell[];
@@ -53,18 +76,53 @@ const USE_OFFLINE_TILES =
   typeof process !== "undefined" &&
   process.env.NEXT_PUBLIC_USE_OFFLINE_TILES === "true";
 
-function getVehicleEmoji(type: Vehicle["type"]) {
+const policeIcon = L.icon({
+  iconUrl: "/police_patrolcar.png",
+  iconSize: [64, 32],
+  iconAnchor: [32, 16],
+  tooltipAnchor: [0, -20],
+});
+
+const ambulanceIcon = L.icon({
+  iconUrl: "/ambulance.png",
+  iconSize: [72, 32],
+  iconAnchor: [36, 16],
+  tooltipAnchor: [0, -20],
+});
+
+const fireIcon = L.icon({
+  iconUrl: "/fire_truck.png",
+  iconSize: [80, 32],
+  iconAnchor: [40, 16],
+  tooltipAnchor: [0, -20],
+});
+
+const municipalIcon = L.divIcon({
+  html: `<span style="font-size:24px;line-height:1">🚜</span>`,
+  className: "vehicle-marker",
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+});
+
+const defaultIcon = L.divIcon({
+  html: `<span style="font-size:24px;line-height:1">🚗</span>`,
+  className: "vehicle-marker",
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+});
+
+function getVehicleIcon(type: Vehicle["type"]) {
   switch (type) {
     case "police":
-      return "🚓";
+      return policeIcon;
     case "ambulance":
-      return "🚑";
+      return ambulanceIcon;
     case "fire":
-      return "🚒";
+      return fireIcon;
     case "municipal":
-      return "🚜";
+      return municipalIcon;
     default:
-      return "🚗";
+      return defaultIcon;
   }
 }
 
@@ -87,8 +145,24 @@ function HexGridLayer({
         const isCorridor = greenCorridorHexes.includes(cell.hex_id);
         const count = cell.incident_count ?? 0;
         const label = hexLabelById[cell.hex_id] ?? "?";
-        // Grey-black outlines: corridor slightly lighter, default dark grey
-        const color = isCorridor ? "#6b7280" : "#374151";
+        const priority = cell.patrol_priority_score ?? 0;
+
+        // Green corridor: cyan-teal border, subtle fill
+        // High incident count: warmer fill (amber tint)
+        // Default: cool grey border, very subtle fill
+        const strokeColor = isCorridor
+          ? "#0d9488"
+          : count >= 3
+            ? "#f59e0b"
+            : "#475569";
+        const fillOpacity = isCorridor
+          ? 0.12
+          : count >= 5
+            ? 0.14
+            : count >= 2
+              ? 0.1
+              : 0.05;
+        const fillColor = isCorridor ? "#0d9488" : count >= 3 ? "#f59e0b" : "#334155";
 
         const positions = (cell.polygon || []).map(([lat, lng]) => [lat, lng] as [number, number]);
         if (positions.length < 3) return null;
@@ -98,18 +172,20 @@ function HexGridLayer({
             key={cell.hex_id}
             positions={positions}
             pathOptions={{
-              color,
-              weight: isCorridor ? 2.5 : 1.5,
-              opacity: 0.9,
-              fillOpacity: 0.08,
+              color: strokeColor,
+              weight: isCorridor ? 2.2 : count >= 2 ? 1.8 : 1.2,
+              opacity: isCorridor ? 0.95 : 0.75,
+              fillColor,
+              fillOpacity,
+              dashArray: isCorridor ? undefined : "2,4",
             }}
             eventHandlers={{}}
           >
             <Tooltip direction="top" offset={[0, -8]} className="hex-tooltip">
-              <div className="font-semibold text-amber-400">Hex Cell</div>
-              <div>ID: {cell.hex_id}</div>
-              <div>Label: {label}</div>
+              <div className="font-semibold text-amber-400">Hex {label}</div>
+              <div className="text-white/80">ID: {cell.hex_id.slice(0, 12)}…</div>
               <div>Incidents: {count}</div>
+              {priority > 0 && <div className="text-amber-400/90">Priority: {priority.toFixed(1)}</div>}
             </Tooltip>
           </Polygon>
         );
@@ -168,24 +244,9 @@ function MapContent({
         </CircleMarker>
       ))}
 
-      {vehicles.map((v) => {
-        const emoji = getVehicleEmoji(v.type);
-        const icon = L.divIcon({
-          html: `<span style="font-size:24px;line-height:1">${emoji}</span>`,
-          className: "vehicle-marker",
-          iconSize: [24, 24],
-          iconAnchor: [12, 12],
-        });
-        return (
-          <Marker key={`vehicle-${String(v.id)}`} position={[v.latitude, v.longitude]} icon={icon}>
-            <Tooltip direction="top" offset={[0, -10]} className="vehicle-tooltip">
-              <div className="font-semibold">{emoji} {v.type}</div>
-              <div>Status: {v.status}</div>
-              <div className="text-white/70">ID: {String(v.id).slice(0, 8)}…</div>
-            </Tooltip>
-          </Marker>
-        );
-      })}
+      {vehicles.map((v) => (
+        <SmoothVehicleMarker key={String(v.id)} v={v} icon={getVehicleIcon(v.type)} />
+      ))}
 
       {trafficSignals.map((s) => {
         const r = s.phase === "RED" ? "#dc2626" : "#4b5563";

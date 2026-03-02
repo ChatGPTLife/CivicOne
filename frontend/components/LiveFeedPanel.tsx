@@ -1,3 +1,4 @@
+// 2025-02-26
 "use client";
 
 import type { DispatchPayload, Incident, PatrolAlert, SimulationResult } from "@/types";
@@ -39,8 +40,8 @@ export default function LiveFeedPanel({
             {alerts.length === 0 ? (
               <p className="text-white/50">No alerts yet.</p>
             ) : (
-              alerts.slice(0, 8).map((alert) => (
-                <div key={alert.id} className="rounded border border-white/10 bg-[#252a31] p-1.5 text-white/90">
+              alerts.slice(0, 8).map((alert, idx) => (
+                <div key={`${alert.id}-${alert.hex_id}-${idx}`} className="rounded border border-white/10 bg-[#252a31] p-1.5 text-white/90">
                   <p className="font-medium">{alert.alert_type}</p>
                   <p className="text-white/70">{alert.message}</p>
                 </div>

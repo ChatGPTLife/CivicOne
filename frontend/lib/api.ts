@@ -1,3 +1,4 @@
+// 2025-02-26
 import axios from "axios";
 
 import type {
@@ -14,7 +15,7 @@ const apiBaseURL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:800
 
 export const api = axios.create({
   baseURL: apiBaseURL,
-  timeout: 10000,
+  timeout: 30000,
   headers: {
     "Content-Type": "application/json",
   },

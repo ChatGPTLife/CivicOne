@@ -26,6 +26,49 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.civic-maplibre,
+.civic-maplibre .maplibregl-map {
+  height: 100%;
+  width: 100%;
+}
+
+.civic-vehicle-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+}
+
+.civic-vehicle-marker img {
+  display: block;
+}
+
+.civic-popup {
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.civic-popup-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+  color: #fbbf24;
+}
+
+.maplibregl-popup-content {
+  background: #1a1d21 !important;
+  border: 2px solid #4b5563 !important;
+  color: #fff !important;
+  padding: 8px 12px !important;
+  border-radius: 6px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+}
+
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: #1a1d21 !important;
+}
+
 /* Leaflet tooltips - dark theme for hex, vehicle, incident */
 .leaflet-tooltip.hex-tooltip,
 .leaflet-tooltip.vehicle-tooltip,

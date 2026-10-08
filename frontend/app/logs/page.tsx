@@ -36,7 +36,7 @@ function formatPayload(type: string, payload: unknown): string {
     case "vehicle_dispatched":
       return p.vehicle
         ? `${(p.vehicle as Record<string, string>).type} → incident ${String(p.incident_id ?? "").slice(0, 8)}…`
-        : p.message ?? "";
+        : p.message != null ? String(p.message) : "";
     case "vehicle_position":
       return p.vehicle
         ? `${(p.vehicle as Record<string, string>).type} → ${String((p.vehicle as Record<string, number>).latitude).slice(0, 8)}, ${String((p.vehicle as Record<string, number>).longitude).slice(0, 8)}`

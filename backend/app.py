@@ -52,15 +52,19 @@ def create_app() -> Flask:
 
     with app.app_context():
         try:
-            from utils.db import ensure_vehicles_table, ensure_incidents_table
+            from utils.db import (
+                ensure_vehicles_table,
+                ensure_incidents_table,
+                ensure_hex_cells_table,
+                ensure_traffic_signals_table,
+            )
+            ensure_hex_cells_table()
+            ensure_traffic_signals_table()
             ensure_vehicles_table()
             ensure_incidents_table()
-        except RuntimeError as error:
-            logger.warning("DB init skipped: %s", error)
-        try:
             hex_service.ensure_hex_cells_in_db()
-        except RuntimeError as error:
-            logger.warning("Hex bootstrap skipped at startup: %s", error)
+        except Exception as error:
+            logger.warning("DB bootstrap error: %s", error)
 
     @app.get("/health")
     def healthcheck():
@@ -88,6 +92,7 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000")),
-        debug=True,
+        debug=False,
+        use_reloader=False,
         allow_unsafe_werkzeug=True,
     )

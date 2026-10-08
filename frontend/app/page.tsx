@@ -335,14 +335,16 @@ export default function Home() {
         if (vehicle) {
           setVehiclesById((previous) => ({ ...previous, [vehicle.id]: vehicle }));
         }
-        if (data.dispatch.route?.geometry && data.dispatch.vehicle) {
-          setRouteGeometry(data.dispatch.route.geometry);
+        const dispatchedVehicle = data.dispatch.vehicle;
+        const routeGeom = data.dispatch.route?.geometry;
+        if (routeGeom && dispatchedVehicle) {
+          setRouteGeometry(routeGeom);
           setAllDispatchRoutes((prev) => {
             const next = prev.filter((r) => r.incidentId !== data.incident.id);
             next.push({
               incidentId: data.incident.id,
-              vehicleId: String(data.dispatch.vehicle.id),
-              geometry: data.dispatch.route.geometry,
+              vehicleId: String(dispatchedVehicle.id),
+              geometry: routeGeom,
             });
             return next;
           });

@@ -3,12 +3,17 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const LERP_FACTOR = 0.25; // 25% of remaining distance per frame – smooth ease-out
-const MIN_DISTANCE = 0.000005; // Stop when this close to target
+/** Match patrol simulator tick (~0.2s) with a little overlap so motion never stalls. */
+const DURATION_MS = 280;
+const SNAP_DISTANCE = 0.008; // ~800m — treat as teleport, snap instead of easing
+
+function easeInOut(t: number) {
+  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
 
 /**
- * Returns smoothly interpolated [lat, lng] that animates toward target.
- * Uses requestAnimationFrame for butter-smooth 60fps updates.
+ * Returns smoothly interpolated [lat, lng] that glides toward the latest target
+ * over a fixed duration (time-based, frame-rate independent).
  */
 export function useInterpolatedPosition(
   targetLat: number,
@@ -16,37 +21,43 @@ export function useInterpolatedPosition(
 ): [number, number] {
   const [position, setPosition] = useState<[number, number]>([targetLat, targetLng]);
   const currentRef = useRef({ lat: targetLat, lng: targetLng });
+  const fromRef = useRef({ lat: targetLat, lng: targetLng });
+  const toRef = useRef({ lat: targetLat, lng: targetLng });
+  const startRef = useRef(0);
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const target = { lat: targetLat, lng: targetLng };
+    const jump = Math.hypot(targetLat - currentRef.current.lat, targetLng - currentRef.current.lng);
+    if (jump < 1e-9) return;
 
-    const animate = () => {
-      const { lat: clat, lng: clng } = currentRef.current;
-      const dlat = target.lat - clat;
-      const dlng = target.lng - clng;
-      const dist = Math.sqrt(dlat * dlat + dlng * dlng);
+    if (jump > SNAP_DISTANCE) {
+      currentRef.current = { lat: targetLat, lng: targetLng };
+      setPosition([targetLat, targetLng]);
+      return;
+    }
 
-      if (dist < MIN_DISTANCE) {
-        currentRef.current = { lat: target.lat, lng: target.lng };
-        setPosition([target.lat, target.lng]);
+    fromRef.current = { ...currentRef.current };
+    toRef.current = { lat: targetLat, lng: targetLng };
+    startRef.current = performance.now();
+
+    const animate = (now: number) => {
+      const t = Math.min(1, (now - startRef.current) / DURATION_MS);
+      const k = easeInOut(t);
+      const lat = fromRef.current.lat + (toRef.current.lat - fromRef.current.lat) * k;
+      const lng = fromRef.current.lng + (toRef.current.lng - fromRef.current.lng) * k;
+      currentRef.current = { lat, lng };
+      setPosition([lat, lng]);
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(animate);
+      } else {
         rafRef.current = null;
-        return;
       }
-
-      currentRef.current = {
-        lat: clat + dlat * LERP_FACTOR,
-        lng: clng + dlng * LERP_FACTOR,
-      };
-      setPosition([currentRef.current.lat, currentRef.current.lng]);
-      rafRef.current = requestAnimationFrame(animate);
     };
 
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(animate);
     return () => {
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-      }
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
   }, [targetLat, targetLng]);
 

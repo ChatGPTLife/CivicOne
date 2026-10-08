@@ -1,37 +1,62 @@
-<!-- 2025-02-26 -->
-# CivicOne Telegram Bot (Node.js)
+# CivicOne Telegram Bot
 
-Async-first implementation. Handles load well and is less prone to lag.
+## 1. Install Python
 
-## Setup
+Use Python 3.10+.
 
-```bash
-cd telegram-bot
-npm install
-cp .env.example .env
-# Edit .env and add your TELEGRAM_BOT_TOKEN (from @BotFather)
+## 2. Open this folder in a terminal
+
+```text
+civicone_telegram_bot
 ```
 
-## Run
+## 3. Install dependencies
 
 ```bash
-npm start
+pip install -r requirements.txt
 ```
 
-## 409 Conflict Error
+## 4. Add your bot token
 
-**Only ONE bot instance can run at a time.** If you get "409 Conflict: terminated by other getUpdates request":
+Copy `.env.example` to `.env`:
 
-1. Stop all bots:
-   ```bash
-   npm run stop-others
-   ```
-   Or manually: `pkill -f run_telegram_bot` (Python) and `pkill -f telegram-bot` (Node)
+```text
+TELEGRAM_BOT_TOKEN=YOUR_REAL_BOT_TOKEN
+```
 
-2. Remove stale lock: `rm /tmp/civicone-telegram-bot.lock`
+Do not share `.env` or upload it to GitHub.
 
-3. Start again: `npm start`
+## 5. Run
 
-## Backend Required
+```bash
+python bot.py
+```
 
-The Flask backend (app.py) must be running on port 8000 for incident submission. If the backend is down, the bot will still respond but reports won't reach the dashboard.
+You should see:
+
+```text
+CivicOne Telegram bot is running...
+Press Ctrl+C to stop.
+```
+
+Then open your bot in Telegram and send:
+
+```text
+/start
+```
+
+## Current menu
+
+- Emergency
+  - Police
+  - Ambulance
+  - Fire & Rescue
+- Nearby Services
+  - Hospitals
+  - Police Stations
+  - Fire Stations
+  - Share Location
+- Report an Issue
+- Help
+
+The nearby-service sections currently contain placeholders for an external location/API service. The report is currently kept in the user's session only; a database can be added next.

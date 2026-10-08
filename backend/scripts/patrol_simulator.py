@@ -15,6 +15,7 @@ Uses: OSRM (https://router.project-osrm.org) for road-based routing.
 """
 from __future__ import annotations
 
+import math
 import os
 import random
 import time
@@ -32,35 +33,37 @@ DATABASE_URL = os.getenv(
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
 OSRM_BASE = os.getenv("OSRM_BASE_URL", "https://router.project-osrm.org").rstrip("/")
 H3_RESOLUTION = int(os.getenv("H3_RESOLUTION", "7"))
-# Smaller step + 1 point per step = smoother \"gliding\" movement
-STEP_SECONDS = float(os.getenv("PATROL_STEP_SECONDS", "0.4"))
-POINTS_PER_STEP = int(os.getenv("PATROL_POINTS_PER_STEP", "1"))  # Route points to advance per tick
+# Tick rate + meters/second along the OSRM polyline (smooth, speed-independent of vertex density)
+STEP_SECONDS = float(os.getenv("PATROL_STEP_SECONDS", "0.2"))
+PATROL_SPEED_MPS = float(os.getenv("PATROL_SPEED_MPS", "48"))  # ~170 km/h in sim scale
+DISPATCH_SPEED_MPS = float(os.getenv("DISPATCH_SPEED_MPS", "75"))  # ~270 km/h emergency sprint
+
+http_session = requests.Session()
+
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.db import fetch_all, execute_query
 
 
 def get_connection():
-    url = DATABASE_URL
-    if url.startswith("postgresql+psycopg2://"):
-        url = url.replace("postgresql+psycopg2://", "postgresql://", 1)
-    return psycopg2.connect(url)
+    return None
 
 
-def fetch_patrolling_vehicles(conn) -> list[dict[str, Any]]:
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT id, type, latitude, longitude, status, current_hex_id
-            FROM vehicles
-            WHERE status = %s
-            """,
-            ("patrolling",),
-        )
-        return [dict(r) for r in cur.fetchall()]
+def fetch_patrolling_vehicles(conn=None) -> list[dict[str, Any]]:
+    return fetch_all(
+        """
+        SELECT id, type, latitude, longitude, status, current_hex_id
+        FROM vehicles
+        WHERE status = %s
+        """,
+        ("patrolling",),
+    )
 
 
 def dispatch_unassigned_incidents() -> int:
     """Call API to assign nearest vehicle to unassigned incidents."""
     try:
-        resp = requests.post(f"{API_BASE}/api/incidents/dispatch-unassigned", timeout=5)
+        resp = http_session.post(f"{API_BASE}/api/incidents/dispatch-unassigned", timeout=5)
         if resp.status_code == 200:
             return resp.json().get("dispatched", 0)
     except Exception:
@@ -68,26 +71,23 @@ def dispatch_unassigned_incidents() -> int:
     return 0
 
 
-def fetch_busy_vehicles_with_incidents(conn) -> list[dict[str, Any]]:
+def fetch_busy_vehicles_with_incidents(conn=None) -> list[dict[str, Any]]:
     """Vehicles with status=busy that are assigned to a non-attended incident."""
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT v.id, v.type, v.latitude, v.longitude, v.status, v.current_hex_id,
-                   i.id AS incident_id, i.latitude AS inc_lat, i.longitude AS inc_lng
-            FROM vehicles v
-            JOIN incidents i ON i.assigned_vehicle_id = v.id AND i.attended = FALSE
-            WHERE v.status = %s
-            """,
-            ("busy",),
-        )
-        return [dict(r) for r in cur.fetchall()]
+    return fetch_all(
+        """
+        SELECT v.id, v.type, v.latitude, v.longitude, v.status, v.current_hex_id,
+               i.id AS incident_id, i.latitude AS inc_lat, i.longitude AS inc_lng
+        FROM vehicles v
+        JOIN incidents i ON i.assigned_vehicle_id = v.id AND (i.attended = FALSE OR i.attended = 0)
+        WHERE v.status = %s
+        """,
+        ("busy",),
+    )
 
 
-def fetch_hex_centers(conn) -> dict[str, tuple[float, float]]:
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT hex_id, center_lat, center_lng FROM hex_cells")
-        return {r["hex_id"]: (float(r["center_lat"]), float(r["center_lng"])) for r in cur.fetchall()}
+def fetch_hex_centers(conn=None) -> dict[str, tuple[float, float]]:
+    rows = fetch_all("SELECT hex_id, center_lat, center_lng FROM hex_cells")
+    return {r["hex_id"]: (float(r["center_lat"]), float(r["center_lng"])) for r in rows}
 
 
 def random_point_in_hex(hex_id: str) -> tuple[float, float]:
@@ -111,6 +111,49 @@ def random_point_in_hex(hex_id: str) -> tuple[float, float]:
     return float(lat), float(lng)
 
 
+def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlng / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def interpolate_point(
+    a: tuple[float, float], b: tuple[float, float], t: float
+) -> tuple[float, float]:
+    return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+
+
+def advance_along_route(
+    route: list[tuple[float, float]],
+    index: int,
+    t: float,
+    distance_m: float,
+) -> tuple[tuple[float, float], int, float, bool]:
+    """Walk `distance_m` along `route` from segment `index` at fraction `t`. Returns (point, index, t, done)."""
+    if len(route) < 2:
+        pt = route[0] if route else (0.0, 0.0)
+        return pt, 0, 0.0, True
+    remaining = distance_m
+    while remaining > 0 and index < len(route) - 1:
+        a, b = route[index], route[index + 1]
+        seg = haversine_m(a[0], a[1], b[0], b[1])
+        if seg < 0.5:
+            index += 1
+            t = 0.0
+            continue
+        left = (1.0 - t) * seg
+        if remaining < left:
+            t = t + remaining / seg
+            return interpolate_point(a, b, t), index, t, False
+        remaining -= left
+        index += 1
+        t = 0.0
+    return route[-1], len(route) - 1, 0.0, True
+
+
 def get_osrm_route(start_lat: float, start_lng: float, end_lat: float, end_lng: float) -> list[tuple[float, float]]:
     """Fetch driving route from OSRM. Returns list of (lat, lng) points along the road."""
     url = (
@@ -119,7 +162,7 @@ def get_osrm_route(start_lat: float, start_lng: float, end_lat: float, end_lng: 
         "?overview=full&geometries=geojson"
     )
     try:
-        resp = requests.get(url, timeout=8)
+        resp = http_session.get(url, timeout=8)
         resp.raise_for_status()
         data = resp.json()
         route = data.get("routes", [{}])[0]
@@ -160,7 +203,7 @@ def push_position(
     longitude: float,
     current_hex_id: str,
 ) -> bool:
-    resp = requests.post(
+    resp = http_session.post(
         f"{API_BASE}/api/vehicles/position",
         json={
             "vehicle_id": vehicle_id,
@@ -175,7 +218,10 @@ def push_position(
 
 def main():
     print("Patrol simulator – Chennai (OSRM road-based movement). Ctrl+C to stop.")
-    print(f"API: {API_BASE}  OSRM: {OSRM_BASE}  Step: {STEP_SECONDS}s")
+    print(
+        f"API: {API_BASE}  OSRM: {OSRM_BASE}  Step: {STEP_SECONDS}s  "
+        f"patrol {PATROL_SPEED_MPS} m/s  dispatch {DISPATCH_SPEED_MPS} m/s"
+    )
     conn = get_connection()
     hex_centers = fetch_hex_centers(conn)
     print(f"Loaded {len(hex_centers)} hex centers.")
@@ -197,28 +243,40 @@ def main():
                 lat, lng = float(v["latitude"]), float(v["longitude"])
                 inc_lat, inc_lng = float(v["inc_lat"]), float(v["inc_lng"])
                 state = vehicle_routes.get(vid)
-                if state and state.get("incident_route") and state["index"] < len(state["route"]):
-                    route = state["route"]
-                    idx = state["index"]
-                    advance = min(POINTS_PER_STEP, len(route) - idx)
-                    new_idx = idx + advance
-                    pt = route[new_idx - 1]
+                if state and state.get("incident_route") and not state.get("done"):
+                    pt, idx, t, done = advance_along_route(
+                        state["route"],
+                        state["index"],
+                        state.get("t", 0.0),
+                        DISPATCH_SPEED_MPS * STEP_SECONDS,
+                    )
                     pt_hex = h3.latlng_to_cell(pt[0], pt[1], H3_RESOLUTION)
-                    if push_position(vid, pt[0], pt[1], pt_hex):
-                        pass
-                    state["index"] = new_idx
-                    if state["index"] >= len(route):
+                    push_position(vid, pt[0], pt[1], pt_hex)
+                    state["index"], state["t"], state["done"] = idx, t, done
+                    if done:
                         del vehicle_routes[vid]
                 else:
                     geometry = get_osrm_route(lat, lng, inc_lat, inc_lng)
                     if len(geometry) < 2:
                         geometry = [(lat, lng), (inc_lat, inc_lng)]
-                    vehicle_routes[vid] = {"route": geometry, "index": 1, "incident_route": True}
-                    if len(geometry) > 1:
-                        pt = geometry[1]
-                        pt_hex = h3.latlng_to_cell(pt[0], pt[1], H3_RESOLUTION)
-                        if push_position(vid, pt[0], pt[1], pt_hex):
-                            print(f"  {v['type']} {vid[:8]}… -> incident (road route)")
+                    vehicle_routes[vid] = {
+                        "route": geometry,
+                        "index": 0,
+                        "t": 0.0,
+                        "done": False,
+                        "incident_route": True,
+                    }
+                    pt, idx, t, done = advance_along_route(
+                        geometry, 0, 0.0, DISPATCH_SPEED_MPS * STEP_SECONDS
+                    )
+                    pt_hex = h3.latlng_to_cell(pt[0], pt[1], H3_RESOLUTION)
+                    if push_position(vid, pt[0], pt[1], pt_hex):
+                        print(f"  {v['type']} {vid[:8]}… -> incident (road route)")
+                    vehicle_routes[vid]["index"] = idx
+                    vehicle_routes[vid]["t"] = t
+                    vehicle_routes[vid]["done"] = done
+                    if done:
+                        del vehicle_routes[vid]
 
             # 2. Move patrolling vehicles
             vehicles = fetch_patrolling_vehicles(conn)
@@ -231,35 +289,42 @@ def main():
                     current_hex = v.get("current_hex_id")
 
                     state = vehicle_routes.get(vid)
-                    if state and state["index"] < len(state["route"]):
-                        # Continue along current route
-                        route = state["route"]
-                        idx = state["index"]
-                        advance = min(POINTS_PER_STEP, len(route) - idx)
-                        new_idx = idx + advance
-                        pt = route[new_idx - 1]
+                    if state and not state.get("incident_route") and not state.get("done"):
+                        pt, idx, t, done = advance_along_route(
+                            state["route"],
+                            state["index"],
+                            state.get("t", 0.0),
+                            PATROL_SPEED_MPS * STEP_SECONDS,
+                        )
                         pt_hex = h3.latlng_to_cell(pt[0], pt[1], H3_RESOLUTION)
-                        if push_position(vid, pt[0], pt[1], pt_hex):
-                            pass
-                        state["index"] = new_idx
-                        if state["index"] >= len(route):
+                        push_position(vid, pt[0], pt[1], pt_hex)
+                        state["index"], state["t"], state["done"] = idx, t, done
+                        if done:
                             del vehicle_routes[vid]
                     else:
-                        # Need new route: current position -> next hex center
                         next_hex, tgt_lat, tgt_lng = pick_next_target(
                             lat, lng, current_hex, hex_centers
                         )
                         geometry = get_osrm_route(lat, lng, tgt_lat, tgt_lng)
                         if len(geometry) < 2:
                             geometry = [(lat, lng), (tgt_lat, tgt_lng)]
-                        # Skip first point (we're already there), start from index 1
-                        vehicle_routes[vid] = {"route": geometry, "index": 1}
-                        if len(geometry) > 1:
-                            pt = geometry[1]
-                            pt_hex = h3.latlng_to_cell(pt[0], pt[1], H3_RESOLUTION)
-                            if push_position(vid, pt[0], pt[1], pt_hex):
-                                print(f"  {v['type']} {vid[:8]}… -> {next_hex[:12]}… (road route)")
-                            vehicle_routes[vid]["index"] = 2
+                        vehicle_routes[vid] = {
+                            "route": geometry,
+                            "index": 0,
+                            "t": 0.0,
+                            "done": False,
+                        }
+                        pt, idx, t, done = advance_along_route(
+                            geometry, 0, 0.0, PATROL_SPEED_MPS * STEP_SECONDS
+                        )
+                        pt_hex = h3.latlng_to_cell(pt[0], pt[1], H3_RESOLUTION)
+                        if push_position(vid, pt[0], pt[1], pt_hex):
+                            print(f"  {v['type']} {vid[:8]}… -> {next_hex[:12]}… (road route)")
+                        vehicle_routes[vid]["index"] = idx
+                        vehicle_routes[vid]["t"] = t
+                        vehicle_routes[vid]["done"] = done
+                        if done:
+                            del vehicle_routes[vid]
 
             time.sleep(STEP_SECONDS)
         except KeyboardInterrupt:

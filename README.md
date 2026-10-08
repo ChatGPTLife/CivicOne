@@ -24,7 +24,7 @@ Civic-one is a full-stack emergency and civic incident management system that pr
 
 ---
 
-## Features
+## Features of Civic-One
 
 ### Core Capabilities
 
